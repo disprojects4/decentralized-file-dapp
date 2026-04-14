@@ -5,6 +5,7 @@ import { useUser } from '@/lib/hooks';
 import { uploadToIPFS, getIPFSUrl } from '@/lib/ipfs';
 import { uploadFileToBlockchain } from '@/lib/contract';
 import { Toast as ToastType } from '@/lib/types';
+import FileAnimation from './FileAnimation';
 
 interface UploadProps {
   onSuccess: () => void;
@@ -17,15 +18,26 @@ interface LogEntry {
   type: 'info' | 'success' | 'error' | 'progress';
 }
 
+interface UploadAnimation {
+  isActive: boolean;
+  fileName: string;
+}
+
 export default function Upload({ onSuccess, onToast }: UploadProps) {
   const { signer, isConnected } = useUser();
   const [isUploading, setIsUploading] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [customName, setCustomName] = useState('');
   const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [uploadAnimation, setUploadAnimation] = useState<UploadAnimation>({
+    isActive: false,
+    fileName: '',
+  });
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       setSelectedFile(e.target.files[0]);
+      setCustomName('');
       setLogs([]);
     }
   };
@@ -43,62 +55,54 @@ export default function Upload({ onSuccess, onToast }: UploadProps) {
     const toastId = `upload-${Date.now()}`;
 
     try {
-      addLog('Initializing upload process...', 'info');
-      addLog(`File: ${selectedFile.name}`, 'info');
+      addLog('Starting upload...', 'info');
+      const fileName = customName || selectedFile.name;
+      addLog(`File: ${fileName}`, 'info');
       addLog(`Size: ${(selectedFile.size / 1024).toFixed(2)} KB`, 'info');
       
-      // Step 1: Show loading toast
       onToast({
         id: toastId,
-        message: 'Uploading file to IPFS...',
+        message: 'Uploading to IPFS...',
         type: 'loading',
       });
 
-      addLog('Connecting to IPFS network...', 'progress');
+      addLog('Connecting to IPFS...', 'progress');
 
-      // Step 2: Upload to IPFS
       const cid = await uploadToIPFS(selectedFile);
-      console.log('File uploaded to IPFS:', cid);
-      addLog(`IPFS upload successful: ${cid.slice(0, 12)}...`, 'success');
+      addLog(`IPFS saved: ${cid.slice(0, 12)}...`, 'success');
 
-      // Step 3: Update toast
       onToast({
         id: toastId,
-        message: 'Saving metadata to blockchain...',
+        message: 'Saving to blockchain...',
         type: 'loading',
       });
 
-      addLog('Submitting transaction to BSC...', 'progress');
+      addLog('Submitting to BSC...', 'progress');
 
-      // Step 4: Upload to blockchain
       const receipt = await uploadFileToBlockchain(
         signer,
-        selectedFile.name,
+        customName || selectedFile.name,
         selectedFile.type || 'application/octet-stream',
         cid
       );
 
-      addLog(`Transaction confirmed: ${receipt?.hash?.slice(0, 10)}...`, 'success');
+      console.log('File saved with name:', customName || selectedFile.name);
+      addLog(`File name saved: ${customName || selectedFile.name}`, 'info');
+      addLog(`Confirmed: ${receipt?.hash?.slice(0, 10)}...`, 'success');
 
-      // Step 5: Success toast
-      onToast({
-        id: toastId,
-        message: `File uploaded successfully! (TX: ${receipt?.hash?.slice(0, 10)}...)`,
-        type: 'success',
-        duration: 5000,
+      // Show animation instead of toast
+      setUploadAnimation({
+        isActive: true,
+        fileName: fileName,
       });
 
-      addLog('Upload process completed successfully', 'success');
-
-      // Reset form
       setSelectedFile(null);
       const input = document.getElementById('file-input') as HTMLInputElement;
       if (input) input.value = '';
+      setTimeout(() => setLogs([]), 3000);
 
-      // Trigger refresh
       onSuccess();
     } catch (error: any) {
-      console.error('Upload error:', error);
       addLog(`Error: ${error.message}`, 'error');
       onToast({
         id: toastId,
@@ -112,20 +116,14 @@ export default function Upload({ onSuccess, onToast }: UploadProps) {
   };
 
   if (!isConnected) {
-    return (
-      <div className="bg-blue-50 border border-blue-200 text-blue-800 px-4 py-3 rounded">
-        Connect your wallet to upload files.
-      </div>
-    );
+    return null;
   }
 
   return (
-    <div className="bg-white rounded-lg shadow-md p-6 border border-gray-200">
-      <h2 className="text-xl font-bold mb-4 text-gray-900">Upload File</h2>
-
-      <div className="space-y-4">
+    <div className="bg-white rounded-2xl shadow-lg border border-gray-200 p-4">
+      <div className="space-y-3">
         {/* File Input */}
-        <div className="border-2 border-dashed border-blue-400 rounded-lg p-6 text-center hover:bg-blue-50 transition">
+        <div className="relative">
           <input
             id="file-input"
             type="file"
@@ -134,33 +132,52 @@ export default function Upload({ onSuccess, onToast }: UploadProps) {
             className="hidden"
           />
           <label htmlFor="file-input" className="cursor-pointer block">
-            <p className="text-gray-700 font-semibold">
-              {selectedFile ? selectedFile.name : 'Click to select a file'}
-            </p>
-            {selectedFile && (
-              <p className="text-sm text-gray-500 mt-2">
-                Size: {(selectedFile.size / 1024 / 1024).toFixed(2)} MB
+            <div className={`border-2 border-dashed rounded-xl p-4 text-center transition ${
+              selectedFile
+                ? 'border-green-400 bg-green-50'
+                : 'border-gray-300 bg-gray-50 hover:border-blue-400'
+            }`}>
+              <p className="text-2xl mb-1">+</p>
+              <p className="text-sm font-medium text-gray-900">
+                {selectedFile ? selectedFile.name : 'Add File'}
               </p>
-            )}
+              {selectedFile && (
+                <p className="text-xs text-gray-600 mt-1">
+                  {(selectedFile.size / 1024 / 1024).toFixed(2)} MB
+                </p>
+              )}
+            </div>
           </label>
         </div>
+
+        {/* File Name Input */}
+        {selectedFile && (
+          <input
+            type="text"
+            placeholder="Enter custom name (optional)"
+            value={customName}
+            onChange={(e) => setCustomName(e.target.value)}
+            disabled={isUploading}
+            className="w-full px-4 py-2 rounded-xl border border-gray-300 focus:border-blue-500 focus:outline-none text-sm placeholder-gray-400 disabled:bg-gray-100"
+          />
+        )}
 
         {/* Upload Button */}
         <button
           onClick={handleUpload}
           disabled={!selectedFile || isUploading}
-          className={`w-full py-3 rounded-lg font-semibold transition-all ${
+          className={`w-full py-3 rounded-xl font-semibold text-white transition-all ${
             !selectedFile || isUploading
-              ? 'bg-gray-300 text-gray-600 cursor-not-allowed'
-              : 'bg-blue-600 text-white hover:bg-blue-700'
+              ? 'bg-gray-300 cursor-not-allowed'
+              : 'bg-blue-600 hover:bg-blue-700 active:scale-95'
           }`}
         >
-          {isUploading ? 'Uploading...' : 'Upload & Save to Blockchain'}
+          {isUploading ? 'Uploading...' : 'Upload'}
         </button>
 
         {/* Terminal Log */}
         {logs.length > 0 && (
-          <div className="bg-gray-900 rounded-lg p-3 font-mono text-xs max-h-56 overflow-y-auto border border-gray-700">
+          <div className="bg-gray-900 rounded-xl p-3 font-mono text-xs max-h-40 overflow-y-auto border border-gray-700">
             {logs.map((log, idx) => (
               <div
                 key={idx}
@@ -180,6 +197,14 @@ export default function Upload({ onSuccess, onToast }: UploadProps) {
           </div>
         )}
       </div>
+
+      {uploadAnimation.isActive && (
+        <FileAnimation
+          fileName={uploadAnimation.fileName}
+          type="upload"
+          onComplete={() => setUploadAnimation({ isActive: false, fileName: '' })}
+        />
+      )}
     </div>
   );
 }

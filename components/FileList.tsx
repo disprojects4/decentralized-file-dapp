@@ -2,13 +2,27 @@
 
 import React, { useState, useEffect } from 'react';
 import { useUser } from '@/lib/hooks';
-import { getMyFiles, formatDate, formatAddress } from '@/lib/contract';
+import { getMyFiles, formatDate } from '@/lib/contract';
 import { getIPFSUrl } from '@/lib/ipfs';
 import { FileMetadata, Toast } from '@/lib/types';
+import FileViewer from './FileViewer';
+import FileAnimation from './FileAnimation';
 
 interface FileListProps {
   refreshTrigger: number;
   onToast: (toast: Toast) => void;
+}
+
+interface ViewerState {
+  isOpen: boolean;
+  cid: string;
+  fileName: string;
+  fileType: string;
+}
+
+interface DownloadAnimation {
+  isActive: boolean;
+  fileName: string;
 }
 
 export default function FileList({ refreshTrigger, onToast }: FileListProps) {
@@ -16,6 +30,17 @@ export default function FileList({ refreshTrigger, onToast }: FileListProps) {
   const [files, setFiles] = useState<FileMetadata[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [copiedCID, setCopiedCID] = useState<string | null>(null);
+  const [downloadingCID, setDownloadingCID] = useState<string | null>(null);
+  const [downloadAnimation, setDownloadAnimation] = useState<DownloadAnimation>({
+    isActive: false,
+    fileName: '',
+  });
+  const [viewer, setViewer] = useState<ViewerState>({
+    isOpen: false,
+    cid: '',
+    fileName: '',
+    fileType: '',
+  });
 
   const fetchFiles = async () => {
     if (!signer || !isConnected) return;
@@ -53,117 +78,173 @@ export default function FileList({ refreshTrigger, onToast }: FileListProps) {
     setTimeout(() => setCopiedCID(null), 2000);
   };
 
-  const handleOpenFile = (cid: string) => {
-    const url = getIPFSUrl(cid);
-    window.open(url, '_blank');
+  const handleOpenFile = (file: FileMetadata) => {
+    if (!file.cid || file.cid.length === 0) {
+      onToast({
+        id: `view-error-${Date.now()}`,
+        message: 'File CID not available',
+        type: 'error',
+        duration: 3000,
+      });
+      return;
+    }
+    setViewer({
+      isOpen: true,
+      cid: file.cid,
+      fileName: file.name || 'Unnamed File',
+      fileType: file.fileType || 'application/octet-stream',
+    });
   };
+
+  const handleDownloadFile = async (file: FileMetadata) => {
+    if (!file.cid || file.cid.length === 0) {
+      onToast({
+        id: `download-error-${Date.now()}`,
+        message: 'File CID not available',
+        type: 'error',
+        duration: 3000,
+      });
+      return;
+    }
+
+    setDownloadingCID(file.cid);
+    try {
+      const url = getIPFSUrl(file.cid);
+      const response = await fetch(url);
+      
+      if (!response.ok) {
+        throw new Error('Failed to download file');
+      }
+
+      const blob = await response.blob();
+      const blobUrl = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = blobUrl;
+      link.download = file.name || 'download';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(blobUrl);
+
+      // Show animation instead of toast
+      setDownloadAnimation({
+        isActive: true,
+        fileName: file.name || 'File',
+      });
+    } catch (error: any) {
+      console.error('Download error:', error);
+      onToast({
+        id: `download-error-${file.cid}`,
+        message: 'Download failed: ' + error.message,
+        type: 'error',
+        duration: 3000,
+      });
+    } finally {
+      setDownloadingCID(null);
+    }
+  };
+
 
   if (!isConnected) {
     return (
-      <div className="bg-gray-50 rounded-lg p-8 text-center">
-        <p className="text-gray-600">Connect your wallet to view your files.</p>
+      <div className="bg-gray-50 rounded-2xl p-6 text-center border border-gray-200">
+        <p className="text-gray-600 text-sm">Connect wallet to view files</p>
+      </div>
+    );
+  }
+
+  if (isLoading && files.length === 0) {
+    return (
+      <div className="text-center py-12">
+        <div className="inline-block w-8 h-8 border-4 border-gray-300 border-t-blue-600 rounded-full animate-spin"></div>
+        <p className="text-gray-600 text-sm mt-4">Loading files...</p>
+      </div>
+    );
+  }
+
+  if (files.length === 0) {
+    return (
+      <div className="text-center py-12 bg-gray-50 rounded-2xl border border-gray-200">
+        <p className="text-gray-600 font-medium">No files yet</p>
+        <p className="text-gray-500 text-sm mt-1">Upload your first file to get started</p>
       </div>
     );
   }
 
   return (
-    <div className="bg-white rounded-lg shadow-md p-6 border border-gray-200">
-      <div className="flex justify-between items-center mb-6">
-        <h2 className="text-xl font-bold flex items-center gap-2">
-          <span className="text-2xl">📂</span>
-          My Files {files.length > 0 && <span className="text-sm bg-blue-100 text-blue-700 px-2 py-1 rounded">({files.length})</span>}
-        </h2>
-        <button
-          onClick={fetchFiles}
-          disabled={isLoading}
-          className="text-sm px-3 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 disabled:bg-gray-400"
-        >
-          {isLoading ? 'Refreshing...' : 'Refresh'}
-        </button>
-      </div>
+    <div className="space-y-3">
+      {files.map((file, idx) => (
+        <div key={idx} className="bg-white rounded-2xl p-4 border border-gray-200 shadow-sm hover:shadow-md transition">
+          <div className="flex items-start justify-between mb-3">
+            <div className="flex-1 min-w-0">
+              <p className="font-semibold text-gray-900 truncate text-sm">{file.name || 'Unnamed File'}</p>
+              <p className="text-xs text-gray-500 mt-1">
+                {file.timestamp ? formatDate(file.timestamp) : 'Unknown date'}
+              </p>
+            </div>
+            <div className="flex gap-2 ml-2">
+              <button
+                onClick={() => handleOpenFile(file)}
+                disabled={!file.cid}
+                className="px-3 py-1 rounded-lg bg-blue-100 text-blue-700 hover:bg-blue-200 font-medium text-xs transition disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                View
+              </button>
+              <button
+                onClick={() => handleCopyCID(file.cid)}
+                disabled={!file.cid}
+                className={`px-3 py-1 rounded-lg font-medium text-xs transition disabled:opacity-50 disabled:cursor-not-allowed ${
+                  copiedCID === file.cid
+                    ? 'bg-green-100 text-green-700'
+                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                }`}
+              >
+                {copiedCID === file.cid ? 'Copied' : 'Copy'}
+              </button>
+              <button
+                onClick={() => handleDownloadFile(file)}
+                disabled={!file.cid || downloadingCID === file.cid}
+                className="px-3 py-1 rounded-lg bg-purple-100 text-purple-700 hover:bg-purple-200 font-medium text-xs transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+              >
+                {downloadingCID === file.cid ? (
+                  <>
+                    <div className="w-3 h-3 border-2 border-purple-700 border-t-transparent rounded-full animate-spin"></div>
+                    <span>Downloading</span>
+                  </>
+                ) : (
+                  'Download'
+                )}
+              </button>
+            </div>
+          </div>
+          <p className="text-xs font-mono text-gray-600 truncate bg-gray-50 px-2 py-1 rounded">
+            {file.cid ? `${file.cid.slice(0, 12)}...${file.cid.slice(-8)}` : 'No CID available'}
+          </p>
+        </div>
+      ))}
+      <button
+        onClick={fetchFiles}
+        disabled={isLoading}
+        className="w-full py-2 rounded-xl text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 transition disabled:opacity-50"
+      >
+        {isLoading ? 'Refreshing...' : 'Refresh List'}
+      </button>
 
-      {isLoading && files.length === 0 ? (
-        <div className="text-center py-8">
-          <div className="inline-block animate-spin text-3xl mb-2">+</div>
-          <p className="text-gray-600">Loading your files...</p>
-        </div>
-      ) : files.length === 0 ? (
-        <div className="text-center py-12">
-          <p className="text-gray-600">No files uploaded yet.</p>
-          <p className="text-sm text-gray-500">Upload a file above to get started.</p>
-        </div>
-      ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b-2 border-gray-200 bg-gray-50">
-                <th className="text-left py-3 px-4 font-semibold">File Name</th>
-                <th className="text-left py-3 px-4 font-semibold">Type</th>
-                <th className="text-left py-3 px-4 font-semibold">CID</th>
-                <th className="text-left py-3 px-4 font-semibold">Uploaded</th>
-                <th className="text-center py-3 px-4 font-semibold">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {files.map((file, idx) => (
-                <tr
-                  key={idx}
-                  className="border-b border-gray-100 hover:bg-blue-50 transition"
-                >
-                  <td className="py-3 px-4">
-                    <div className="flex items-center gap-2">
-                      <span className="text-lg">
-                        {file.fileType?.includes('image')
-                          ? '🖼️'
-                          : file.fileType?.includes('pdf')
-                            ? '📄'
-                            : file.fileType?.includes('text')
-                              ? '📝'
-                              : '📎'}
-                      </span>
-                      <span className="font-medium text-gray-800 truncate max-w-xs" title={file.name}>
-                        {file.name}
-                      </span>
-                    </div>
-                  </td>
-                  <td className="py-3 px-4 text-xs text-gray-600">
-                    {file.fileType.split('/')[1] || 'unknown'}
-                  </td>
-                  <td className="py-3 px-4 text-xs font-mono">
-                    <code className="bg-gray-100 px-2 py-1 rounded" title={file.cid || 'N/A'}>
-                      {(file.cid || 'N/A').slice(0, 8)}...
-                    </code>
-                  </td>
-                  <td className="py-3 px-4 text-xs text-gray-600">
-                    {formatDate(file.timestamp)}
-                  </td>
-                  <td className="py-3 px-4">
-                    <div className="flex gap-2 justify-center">
-                      <button
-                        onClick={() => handleCopyCID(file.cid)}
-                        title="Copy CID"
-                        className={`px-3 py-1 rounded text-xs font-semibold transition ${
-                          copiedCID === file.cid
-                            ? 'bg-green-500 text-white'
-                            : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-                        }`}
-                      >
-                        {copiedCID === file.cid ? '✓ Copied' : '📋 Copy'}
-                      </button>
-                      <button
-                        onClick={() => handleOpenFile(file.cid)}
-                        title="Open in IPFS gateway"
-                        className="px-3 py-1 rounded text-xs font-semibold bg-blue-500 text-white hover:bg-blue-600 transition"
-                      >
-                        👁️ View
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+      {viewer.isOpen && (
+        <FileViewer
+          cid={viewer.cid}
+          fileName={viewer.fileName}
+          fileType={viewer.fileType}
+          onClose={() => setViewer({ ...viewer, isOpen: false })}
+        />
+      )}
+
+      {downloadAnimation.isActive && (
+        <FileAnimation
+          fileName={downloadAnimation.fileName}
+          type="download"
+          onComplete={() => setDownloadAnimation({ isActive: false, fileName: '' })}
+        />
       )}
     </div>
   );

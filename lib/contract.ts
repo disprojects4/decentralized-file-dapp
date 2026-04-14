@@ -106,12 +106,18 @@ export async function getMyFiles(signer: JsonRpcSigner): Promise<FileMetadata[]>
     const files = await contract.getMyFiles();
 
     // Convert contract response to FileMetadata array
-    return files.map((file: any) => ({
-      name: file.name,
-      fileType: file.fileType,
-      cid: file.cid,
-      timestamp: Number(file.timestamp),
-    }));
+    return files.map((file: any) => {
+      // Contract uses 'fileName' and 'fileHash', map to our interface
+      const name = (file.fileName && typeof file.fileName === 'string' && file.fileName.trim()) ? file.fileName : '';
+      const cid = file.fileHash || file.cid || '';
+      
+      return {
+        name: name,
+        fileType: file.fileType || file.type || 'application/octet-stream',
+        cid: cid,
+        timestamp: Number(file.timestamp) || 0,
+      };
+    });
   } catch (error: any) {
     console.error('Fetch files error:', error);
     throw new Error(`Failed to fetch files: ${error.message}`);
@@ -193,3 +199,11 @@ export async function getFileCount(signer: JsonRpcSigner): Promise<number> {
     return 0;
   }
 }
+
+/**
+ * Delete a file from blockchain
+ * @param signer - Ethers signer
+ * @param index - File index to delete
+ * @returns Transaction receipt
+ */
+
